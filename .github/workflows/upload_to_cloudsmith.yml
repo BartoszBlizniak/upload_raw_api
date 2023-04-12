@@ -1,0 +1,46 @@
+name: Upload to Cloudsmith
+
+on:
+  workflow_dispatch:
+
+env:
+  CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+  CLOUDSMITH_USERNAME: token
+  CLOUDSMITH_ORG: YOUR-ORG-NAME
+  CLOUDSMITH_REPO: YOUR-REPO-NAME
+  PACKAGE_FILE: large-file.zip
+  PACKAGE_NAME: large-file
+
+jobs:
+  upload_to_cloudsmith:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v2
+    - name: Create a 150 MB file and zip it
+      run: |
+        dd if=/dev/zero of=large-file bs=1M count=150
+        zip large-file.zip large-file
+        rm large-file
+
+    - name: Calculate SHA-256 checksum
+      run: echo "CONTENT_SHA256=$(shasum -a256 \"${{ env.PACKAGE_FILE }}\" | cut -f1 -d' ')" >> $GITHUB_ENV
+
+    - name: Upload package file to Cloudsmith
+      run: |
+        UPLOAD_RESPONSE=$(curl \
+          --upload-file ${{ env.PACKAGE_FILE }} \
+          -u '${{ env.CLOUDSMITH_USERNAME }}:${{ env.CLOUDSMITH_API_KEY }}' \
+          -H "Content-Sha256: ${{ env.CONTENT_SHA256 }}" \
+          https://upload.cloudsmith.io/${{ env.CLOUDSMITH_ORG }}/${{ env.CLOUDSMITH_REPO }}/${{ env.PACKAGE_FILE }})
+        echo "UPLOAD_RESPONSE=$UPLOAD_RESPONSE" >> $GITHUB_ENV
+
+    - name: Complete package upload to create the package
+      run: |
+        PACKAGE_IDENTIFIER=$(echo $UPLOAD_RESPONSE | jq -r '.identifier')
+        PACKAGE_JSON=$(printf '{"package_file": "%s", "name": "${{ env.PACKAGE_NAME }}", "description": "Everything about packaging files.", "summary": "My Package File", "version": "1.0"}' $PACKAGE_IDENTIFIER)
+        curl -X POST -H "Content-Type: application/json" \
+          -u '${{ env.CLOUDSMITH_USERNAME }}:${{ env.CLOUDSMITH_API_KEY }}' \
+          -d "$PACKAGE_JSON" \
+          https://api-prd.cloudsmith.io/v1/packages/${{ env.CLOUDSMITH_ORG }}/${{ env.CLOUDSMITH_REPO }}/upload/raw/
